@@ -573,10 +573,14 @@ name = "token-bucket-rl"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "futures-core",
+ "pin-project",
  "serde",
  "tokio",
  "tower",
  "tower-http",
+ "tower-layer",
+ "tower-service",
  "tracing",
  "tracing-subscriber",
  "uuid",
