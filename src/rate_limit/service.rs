@@ -1,4 +1,5 @@
-use super::Rate;
+use super::{Rate, ResponseFuture};
+use crate::{BoxError, rate_limit::RateLimitError};
 use futures_core::ready;
 use std::{
     future::Future,
@@ -16,20 +17,6 @@ pub struct RateLimit<T> {
     rate: Rate,
     state: State,
     sleep: Pin<Box<Sleep>>,
-}
-
-impl<T: Clone> Clone for RateLimit<T> {
-    fn clone(&self) -> Self {
-        // Since we hold an `OwnedSemaphorePermit`, we can't derive `Clone`.
-        // Instead, when cloning the service, create a new service with the
-        // same semaphore, but with the permit in the un-acquired state.
-        Self {
-            inner: self.inner.clone(),
-            rate: self.rate.clone(),
-            state: self.state.clone(),
-            sleep: Box::pin(tokio::time::sleep_until(self.sleep.as_ref().deadline())),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -78,28 +65,36 @@ impl<T> RateLimit<T> {
 impl<S, Request> Service<Request> for RateLimit<S>
 where
     S: Service<Request>,
+    S::Error: Into<BoxError>,
 {
     type Response = S::Response;
-    type Error = S::Error;
-    type Future = S::Future;
+    type Error = BoxError;
+    type Future = ResponseFuture<S::Future>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), BoxError>> {
+        println!("Rate Limit Service #1");
         match self.state {
-            State::Ready { .. } => return Poll::Ready(ready!(self.inner.poll_ready(cx))),
+            State::Ready { .. } => {
+                println!("Rate Limit Service #2");
+                return Poll::Ready(ready!(self.inner.poll_ready(cx).map_err(Into::into)))
+            },
             State::Limited => {
                 if Pin::new(&mut self.sleep).poll(cx).is_pending() {
+                    println!("Inside limited");
+
                     tracing::trace!("rate limit exceeded; sleeping.");
-                    return Poll::Pending;
+                    return Poll::Ready(Err(Box::new(RateLimitError(()))));
+                    // return Poll::Pending;
                 }
             }
         }
-
+        println!("Rate Limit Service #3");
         self.state = State::Ready {
             until: Instant::now() + self.rate.per(),
             rem: self.rate.num(),
         };
-
-        Poll::Ready(ready!(self.inner.poll_ready(cx)))
+        println!("Rate Limit Service #4");
+        Poll::Ready(ready!(self.inner.poll_ready(cx).map_err(Into::into)))
     }
 
     fn call(&mut self, request: Request) -> Self::Future {
@@ -130,7 +125,9 @@ where
                 }
 
                 // Call the inner future
-                self.inner.call(request)
+                ResponseFuture {
+                    response_future: self.inner.call(request),
+                }   
             }
             State::Limited => panic!("service not ready; poll_ready must be called first"),
         }
