@@ -61,7 +61,7 @@ async fn main() {
                         )
                     }
                 }))
-                .layer(RateLimitLayer::new(5, Duration::from_secs(15)))
+                .layer(RateLimitLayer::new(5, Duration::from_secs(5)))
                 .layer(TraceLayer::new_for_http())
         );
     let addr = SocketAddr::from(([127, 0, 0, 1], 4000));
